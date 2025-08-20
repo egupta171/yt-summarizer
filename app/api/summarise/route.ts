@@ -1,202 +1,193 @@
-import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { extractYouTubeId, chunkText } from "@/lib/youtube";
-import { serverSupabase } from "@/lib/supabase";
+// app/api/summarise/route.ts
+export const runtime = "nodejs";
+import { NextResponse, NextRequest } from "next/server";
 import OpenAI from "openai";
-import ytdl from "ytdl-core";
-import { YoutubeTranscript } from "youtube-transcript";
+import { z } from "zod";
+import { serverSupabase } from "@/lib/supabase";
+import { fetchTranscript } from "@/lib/transcript";
 
-export const runtime = "nodejs"; // needed for ytdl-core
-
-const bodySchema = z.object({
-  url: z.string().url(),
-  instructions: z.string().max(4000).optional()
+// --- helpers ---
+const BodySchema = z.object({
+  url: z.string().url("Invalid URL"),
+  instructions: z.string().max(3000).optional()
 });
 
-export async function POST(req: NextRequest) {
-  const json = await req.json().catch(() => ({}));
-  const parse = bodySchema.safeParse(json);
-  if (!parse.success) {
-    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+type Lvl = "info" | "warn" | "error";
+function makeLogger(scope: string) {
+  const requestId = crypto.randomUUID();
+  const log = (level: Lvl, msg: string, data?: Record<string, unknown>) => {
+    // JSON logs are easier to filter in Render
+    const payload = {
+      ts: new Date().toISOString(),
+      level,
+      scope,
+      requestId,
+      msg,
+      ...(data ?? {})
+    };
+    // Use console[level] where available
+    (console[level] ?? console.log)(JSON.stringify(payload));
+  };
+  return {
+    requestId,
+    info: (m: string, d?: Record<string, unknown>) => log("info", m, d),
+    warn: (m: string, d?: Record<string, unknown>) => log("warn", m, d),
+    error: (m: string, d?: Record<string, unknown>) => log("error", m, d)
+  };
+}
+
+function errMsg(e: unknown) {
+    return e instanceof Error ? e.message : String(e);
   }
 
-  const { url, instructions } = parse.data;
-  const videoId = extractYouTubeId(url);
-  if (!videoId) {
-    return NextResponse.json({ error: "Could not parse YouTube URL" }, { status: 400 });
-  }
-
-  const supabase = serverSupabase();
-
-  // Pre-insert a 'pending' record
-  const { data: insertRow, error: insertErr } = await supabase
-    .from("video_summaries")
-    .insert({
-      video_url: url,
-      instructions: instructions || null,
-      status: "pending",
-      // if you have auth later:
-      // if you have auth later:
-     
-    })
-    .select()
-    .single();
-
-  if (insertErr) {
-    // We still continue, but return info—client doesn't need to know DB detail
-    console.error("Supabase insert error", insertErr);
-  }
-
-  // Fetch metadata (title) & transcript
-  let videoTitle = "";
+function extractYouTubeId(url: string): string | null {
   try {
-    const info = await ytdl.getBasicInfo(videoId);
-    videoTitle = info.videoDetails?.title ?? "";
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) {
+      return u.pathname.slice(1) || null;
+    }
+    if (u.searchParams.get("v")) return u.searchParams.get("v");
+    // Handle shorts & embed
+    const m = u.pathname.match(/\/(shorts|embed)\/([^/?#]+)/);
+    if (m?.[2]) return m[2];
+  } catch {}
+  return null;
+}
+
+async function fetchTitle(videoUrl: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`,
+      { headers: { "user-agent": "yt-summarizer/1.0" } }
+    );
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return (data?.title as string) || undefined;
   } catch {
-    // ignore if metadata fails
-  }
-
-  let transcriptText = "";
-  try {
-    // prefer English, then any available (auto-captions also work)
-    const entries = await YoutubeTranscript.fetchTranscript(videoId, { lang: "en" })
-      .catch(() => YoutubeTranscript.fetchTranscript(videoId));
-    transcriptText = entries.map((e) => e.text).join(" ").replace(/\s+/g, " ").trim();
-  } catch (err) {
-    console.error("Transcript fetch failed:", err);
-    return await finalizeAndRespond({
-      supabase,
-      rowId: insertRow?.id,
-      status: "failed",
-      videoTitle,
-      summary: null,
-      transcript: null,
-      errorMsg: "Transcript not available for this video."
-    });
-  }
-
-  if (!transcriptText) {
-    return await finalizeAndRespond({
-      supabase,
-      rowId: insertRow?.id,
-      status: "failed",
-      videoTitle,
-      summary: null,
-      transcript: null,
-      errorMsg: "Empty transcript."
-    });
-  }
-
-  // Summarize with OpenAI Responses API
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini"; // override if you like
-
-  const system = [
-    "You are a world-class summarizer.",
-    "Write in crisp, structured bullets.",
-    "Include key takeaways and optional timestamps if evident.",
-    "Be faithful to the source; avoid hallucinations."
-  ].join(" ");
-
-  const userInstruction = instructions?.trim()
-    ? `Special instructions:\n${instructions.trim()}`
-    : "No special instructions.";
-
-  // For very long transcripts, summarize in chunks then compress.
-  const chunks = chunkText(transcriptText, 14000);
-  const chunkSummaries: string[] = [];
-
-  try {
-    for (let i = 0; i < chunks.length; i++) {
-      const part = chunks[i];
-      const res = await client.responses.create({
-        model,
-        input: [
-          { role: "system", content: system },
-          {
-            role: "user",
-            content:
-              `Video title: ${videoTitle}\n` +
-              `${userInstruction}\n\n` +
-              `TRANSCRIPT (Part ${i + 1}/${chunks.length}):\n` +
-              part
-          }
-        ]
-      });
-      chunkSummaries.push(res.output_text ?? "");
-    }
-
-    // If multiple chunks, compress into a final single summary
-    let finalSummary = chunkSummaries.join("\n\n");
-    if (chunks.length > 1) {
-      const res2 = await client.responses.create({
-        model,
-        input: [
-          { role: "system", content: system },
-          {
-            role: "user",
-            content:
-              `Combine and de-duplicate these partial summaries into one cohesive summary with clear sections (Overview, Key Points, Action Items, Memorable Quotes if any):\n\n${finalSummary}`
-          }
-        ]
-      });
-      finalSummary = res2.output_text ?? finalSummary;
-    }
-
-    return await finalizeAndRespond({
-      supabase,
-      rowId: insertRow?.id,
-      status: "success",
-      videoTitle,
-      summary: finalSummary,
-      transcript: process.env.STORE_TRANSCRIPTS === "true" ? transcriptText : null,
-      errorMsg: null
-    });
-  } catch (err: any) {
-    console.error("OpenAI error", err);
-    return await finalizeAndRespond({
-      supabase,
-      rowId: insertRow?.id,
-      status: "failed",
-      videoTitle,
-      summary: null,
-      transcript: null,
-      errorMsg: "Summarization failed. Please try again."
-    });
+    return undefined;
   }
 }
 
-async function finalizeAndRespond({
+type RowStatus = "success" | "failed";
+
+async function finalize({
   supabase,
-  rowId,
+  id,
   status,
-  videoTitle,
-  summary,
-  transcript,
-  errorMsg
+  error
 }: {
   supabase: ReturnType<typeof serverSupabase>;
-  rowId?: string;
-  status: "success" | "failed";
-  videoTitle?: string;
-  summary: string | null;
-  transcript: string | null;
-  errorMsg: string | null;
+  id?: string;
+  status: RowStatus;
+  error?: string | null;
 }) {
-  if (rowId) {
-    await supabase
-      .from("video_summaries")
-      .update({
-        video_title: videoTitle ?? null,
-        status,
-        error: errorMsg
-      })
-      .eq("id", rowId);
+  if (id) {
+    await supabase.from("video_summaries").update({ status, error: error ?? null }).eq("id", id);
+  }
+}
+
+
+export async function POST(req: NextRequest) {
+  const supabase = serverSupabase();
+  const log = makeLogger("summarise");
+  log.info("start");
+
+  
+
+  const sendError = (status: number, message: string, code?: string, ctx?: Record<string, unknown>) => {
+    log.error(`HTTP ${status} ${code ?? ""} ${message}`, ctx);
+    return NextResponse.json({ error: message, code, requestId: log.requestId }, { status });
+  };
+
+  // Guard: ensure service role really loaded
+  try {
+    const payload = JSON.parse(Buffer.from(String(process.env.SUPABASE_SERVICE_ROLE_KEY).split(".")[1], "base64").toString());
+    if (payload?.role !== "service_role") {
+      return NextResponse.json({ error: "Server misconfigured (wrong Supabase key)" }, { status: 500 });
+    }
+  } catch {}
+
+  // Parse body
+  let url: string, instructions: string | undefined;
+  try {
+    const body = await req.json();
+    ({ url, instructions } = BodySchema.parse(body));
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Invalid request body" }, { status: 400 });
   }
 
-  if (status === "failed") {
-    return NextResponse.json({ error: errorMsg ?? "Failed." }, { status: 500 });
+  // Validate/normalize URL
+  const videoId = extractYouTubeId(url);
+  console.log("Video ID to be extracted is: ", videoId);
+  if (!videoId) {
+    return sendError(400, "Could not extract YouTube video ID from URL.", "BAD_URL", { url });
   }
-  return NextResponse.json({ id: rowId, videoTitle, summary });
+
+  // Insert pending row (no summary stored)
+  let rowId: string | undefined;
+  try {
+    const { data, error } = await supabase
+      .from("video_summaries")
+      .insert({ video_url: url, instructions: instructions ?? null, status: "pending" })
+      .select()
+      .single();
+    if (error) throw error;
+    rowId = data.id;
+  } catch (e: any) {
+    // If we can't even insert, bail quickly
+    return NextResponse.json({ error: `DB insert failed: ${e?.message ?? e}` }, { status: 500 });
+  }
+
+  try {
+    // Fetch video title (best-effort)
+    const videoTitle = await fetchTitle(url);
+    console.log("Video Title: ", videoTitle);
+
+    // ⬇️ call your Python service here
+    const transcript = await fetchTranscript(videoId);
+    console.log("Transcript: ", transcript);
+
+    // Summarize with OpenAI
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error("OPENAI_API_KEY is missing");
+    }
+    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+    const prompt = [
+      `Summarize the following YouTube transcript for a general audience.`,
+      instructions ? `Special instructions: ${instructions}` : "",
+      `Return concise, well-structured output. If relevant, include bullet points and key takeaways.`,
+      `Transcript:\n${transcript}`
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const resp = await openai.responses.create({
+      model,
+      input: prompt,
+      temperature: 0.4
+    });
+
+    // Prefer the convenience getter if available
+    // Fallback to digging into content parts if older SDK
+    // @ts-ignore
+    const summary: string =
+      // @ts-ignore
+      resp.output_text ??
+      // @ts-ignore
+      resp.content?.map((c: any) => c?.text).join("\n") ??
+      JSON.stringify(resp);
+
+    await finalize({ supabase, id: rowId, status: "success", error: null });
+    return NextResponse.json({ id: rowId, videoTitle, summary }, { status: 200 });
+  } catch (err: any) {
+    const msg = typeof err?.message === "string" ? err.message : "Unexpected server error";
+    await finalize({ supabase, id: rowId, status: "failed", error: msg.slice(0, 500) });
+    const status =
+      msg.includes("Transcript not available") ? 422 :
+      msg.includes("OPENAI_API_KEY") ? 500 :
+      500;
+    return NextResponse.json({ error: msg }, { status });
+  }
 }

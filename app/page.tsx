@@ -33,7 +33,7 @@ export default function Page() {
     <main className="relative z-10 mx-auto max-w-3xl px-4 py-10 sm:py-16">
       <header className="mb-6 sm:mb-10">
         <div className="inline-flex items-center gap-2 rounded-full border border-[#203042] bg-card/60 px-3 py-1 text-xs text-subtle">
-          Built with Next.js · Supabase · OpenAI
+          Vedyug AI Tools • Built in 🇮🇳 for the 🌍 
         </div>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight sm:text-5xl">
           Summarize <span className="text-accent">YouTube</span> in seconds
@@ -123,7 +123,11 @@ export default function Page() {
       )}
 
       <footer className="mt-10 text-center text-xs text-subtle">
-        © {new Date().getFullYear()} YT Summarizer
+        © {new Date().getFullYear()} Vedyug Daily 🇮🇳 
+        <span className="mx-2 text-ink/30">•</span>
+        <a href="https://instagram.com/vedyug.daily" target="_blank" rel="noopener noreferrer" className="hover:text-accent">Instagram</a>
+        <span className="mx-2 text-ink/30">•</span>
+        <a href="https://youtube.com/@vedyug.daily" target="_blank" rel="noopener noreferrer" className="hover:text-accent">YouTube</a>
       </footer>
     </main>
   );
