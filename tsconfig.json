@@ -36,6 +36,7 @@
   "include": [
     "app",
     "lib",
+    "types",
     "next-env.d.ts",
     "next.config.mjs",
     "tailwind.config.ts",
