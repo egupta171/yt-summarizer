@@ -1,0 +1,13 @@
+# Node / Next
+node_modules/
+.next/
+out/
+*.log
+
+# Env files
+.env*
+!.env.example   # keep only the template tracked
+
+# OS / Editor
+.DS_Store
+.vscode/
