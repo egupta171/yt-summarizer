@@ -1,39 +1,114 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { browserSupabase } from "@/lib/supabaseBrowser";
 
 type ApiResponse = { summary?: string; videoTitle?: string; id?: string; error?: string };
 
 export default function Page() {
-  const [url, setUrl] = useState("");
-  const [notes, setNotes] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<ApiResponse | null>(null);
+    const supabase = browserSupabase();
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+    const [session, setSession] = useState<any>(null);
+    const [profile, setProfile] = useState<{ credits: number; email: string } | null>(null);
+
+    const [url, setUrl] = useState("");
+    const [notes, setNotes] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [result, setResult] = useState<ApiResponse | null>(null);
+
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+        const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+        return () => sub.subscription.unsubscribe();
+      }, []);
+
+    useEffect(() => {
+    const loadProfile = async () => {
+      if (!session?.user) { setProfile(null); return; }
+      const { data } = await supabase
+        .from("profiles")
+        .select("credits, email")
+        .eq("id", session.user.id)
+        .single();
+      setProfile(data ?? null);
+    };
+    loadProfile();
+    }, [session]);
+
+    const signIn = async () => {
+        await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: { redirectTo: `${window.location.origin}/auth/callback` }
+        });
+      };
+
+    const signOut = async () => {
+    await supabase.auth.signOut();
+    setProfile(null);
     setResult(null);
-    try {
-      const res = await fetch("/api/summarise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, instructions: notes })
-      });
-      const data = (await res.json()) as ApiResponse;
-      setResult(data);
-    } catch (err: any) {
-      setResult({ error: err?.message ?? "Something went wrong" });
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+
+    const onSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        
+        // checks if the user is signed-in
+        if (!session?.user) {
+            await signIn();
+            return;
+        }  
+        setLoading(true);
+        setResult(null);
+        try {
+        const res = await fetch("/api/summarise", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url, instructions: notes })
+        });
+        const data = (await res.json()) as ApiResponse;
+        setResult(data);
+
+        // refresh credits after a run (success or fail)
+        const { data: p } = await supabase.from("profiles").select("credits, email").single();
+        if (p) setProfile(p);
+        } 
+        
+        catch (err: any) {
+        setResult({ error: err?.message ?? "Something went wrong" });
+        } finally {
+        setLoading(false);
+        }
+    };
+
+
+    if (!session) {
+        return (
+          <main className="mx-auto max-w-2xl p-6">
+            <header className="mb-6 flex items-center justify-between">
+              <h1 className="text-2xl font-semibold">YT Summarizer</h1>
+              <button onClick={signIn} className="rounded-lg border px-3 py-1.5 hover:bg-white/5">
+                Sign in with Google
+              </button>
+            </header>
+            <p className="text-sm text-subtle">On new user registration, you will get 5 credits. Each summary consumes 1 credit. Please sign in to use your credits.</p>
+          </main>
+        );
+      }
 
   return (
     <main className="relative z-10 mx-auto max-w-3xl px-4 py-10 sm:py-16">
+        <header className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Vedyug AI Tools • Built in 🇮🇳 for the 🌍 </h1>
+          <p className="text-xs text-subtle">Namaste 🙏🏻 {profile?.email ?? "user"}, Credits: {profile?.credits ?? "…"}</p>
+        </div>
+        <button onClick={signOut} className="rounded-lg border px-3 py-1.5 hover:bg-white/5">
+          Sign out
+        </button>
+      </header>
+    {/*
       <header className="mb-6 sm:mb-10">
         <div className="inline-flex items-center gap-2 rounded-full border border-[#203042] bg-card/60 px-3 py-1 text-xs text-subtle">
-          Vedyug AI Tools • Built in 🇮🇳 for the 🌍 
+          
         </div>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight sm:text-5xl">
           Summarize <span className="text-accent">YouTube</span> in seconds
@@ -41,7 +116,7 @@ export default function Page() {
         <p className="mt-3 text-subtle">
           Paste a video link, optionally add instructions. Get a clean, skimmable summary.
         </p>
-      </header>
+      </header> */}
 
       {/* Card */}
       <form
@@ -127,7 +202,7 @@ export default function Page() {
         <span className="mx-2 text-ink/30">•</span>
         <a href="https://instagram.com/vedyug.daily" target="_blank" rel="noopener noreferrer" className="hover:text-accent">Instagram</a>
         <span className="mx-2 text-ink/30">•</span>
-        <a href="https://youtube.com/@vedyug.daily" target="_blank" rel="noopener noreferrer" className="hover:text-accent">YouTube</a>
+        <a href="https://youtube.com/@vedyugdaily" target="_blank" rel="noopener noreferrer" className="hover:text-accent">YouTube</a>
       </footer>
     </main>
   );
