@@ -13,11 +13,11 @@ export async function fetchTranscript(videoId: string): Promise<string> {
   const base = process.env.TRANSCRIPT_API_URL;
   if (!base) throw new Error("TRANSCRIPT_API_URL is not set");
 
-  const url = `${base.replace(/\/$/, "")}/transcript?videoId=${encodeURIComponent(videoId)}`;
+  const hit_url = `${base.replace(/\/$/, "")}/transcript?videoId=${encodeURIComponent(videoId)}`;
 
-  console.log("URL being hit is: ",url)
+  console.log("URL being hit is: ",hit_url)
 
-  const res = await fetch(url);
+  const res = await fetch(hit_url, { method: 'GET' });
   console.log("Res is: ",res)
   
   const body = await res.json()

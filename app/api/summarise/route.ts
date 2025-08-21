@@ -145,7 +145,6 @@ export async function POST(req: NextRequest) {
 
     // ⬇️ call your Python service here
     const transcript = await fetchTranscript(videoId);
-    console.log("Transcript: ", transcript);
 
     // Summarize with OpenAI
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
