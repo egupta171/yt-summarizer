@@ -13,5 +13,5 @@ export async function GET(request: Request) {
   }
 
   // redirect home (or to previous)
-  return NextResponse.redirect(new URL('/', request.url));
+  return NextResponse.redirect(new URL('/', url.origin));
 }
