@@ -32,9 +32,7 @@ def pkg_ver(name: str) -> str:
 @app.get("/transcript")
 
 def transcript(videoId: str = Query(..., min_length=5)):
-    print("Entered the function")
     url = "https://www.youtube.com/watch?v="+videoId
-    print("Entered the python file with url value as: "+ url)
     # --- fetch watch page to grab API key + client version ---
     ua = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

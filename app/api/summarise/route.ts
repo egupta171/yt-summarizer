@@ -4,7 +4,9 @@ import { NextResponse, NextRequest } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
 import { serverSupabase } from "@/lib/supabase";
+import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
 import { fetchTranscript } from "@/lib/transcript";
+import { cookies } from "next/headers";
 
 // --- helpers ---
 const BodySchema = z.object({
@@ -88,6 +90,16 @@ async function finalize({
 
 
 export async function POST(req: NextRequest) {
+  
+    const supabaseAuth = createRouteHandlerClient({ cookies }); // RLS client (uses anon key + cookies)
+    const { data: { session } } = await supabaseAuth.auth.getSession();
+    if (!session?.user) {
+        return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+    const user = session.user;
+
+
+
   const supabase = serverSupabase();
   const log = makeLogger("summarise");
   log.info("start");
@@ -123,15 +135,28 @@ export async function POST(req: NextRequest) {
     return sendError(400, "Could not extract YouTube video ID from URL.", "BAD_URL", { url });
   }
 
+  // *** ATOMIC CREDIT CHECK ***
+  // call the RPC with the RLS client (works because function is SECURITY DEFINER)
+  const { data: creditRes, error: creditErr } = await supabaseAuth.rpc("consume_credit", { p_user_id: user.id });
+  if (creditErr) {
+    return NextResponse.json({ error: `Credit check failed: ${creditErr.message}` }, { status: 500 });
+  }
+  if (!creditRes?.[0]?.ok) {
+    const remaining = creditRes?.[0]?.remaining ?? 0;
+    return NextResponse.json({ error: `No credits left. Remaining: ${remaining}` }, { status: 402 });
+  }
+
   // Insert pending row (no summary stored)
   let rowId: string | undefined;
   try {
     const { data, error } = await supabase
       .from("video_summaries")
-      .insert({ video_url: url, instructions: instructions ?? null, status: "pending" })
+      .insert({ user_id: user.id, video_url: url, instructions: instructions ?? null, status: "pending" })
       .select()
       .single();
-    if (error) throw error;
+    if (error) {
+        return NextResponse.json({ error: `DB insert failed: ${error.message}` }, { status: 500 });
+    }
     rowId = data.id;
   } catch (e: any) {
     // If we can't even insert, bail quickly
@@ -178,15 +203,30 @@ export async function POST(req: NextRequest) {
       resp.content?.map((c: any) => c?.text).join("\n") ??
       JSON.stringify(resp);
 
-    await finalize({ supabase, id: rowId, status: "success", error: null });
+    //await finalize({ supabase, id: rowId, status: "success", error: null });
+
+    // Save summary (update the same row)
+    await supabaseAuth
+      .from("video_summaries")
+      .update({ status: "success", error: null})
+      .eq("id", rowId);
+    
     return NextResponse.json({ id: rowId, videoTitle, summary }, { status: 200 });
   } catch (err: any) {
-    const msg = typeof err?.message === "string" ? err.message : "Unexpected server error";
-    await finalize({ supabase, id: rowId, status: "failed", error: msg.slice(0, 500) });
-    const status =
-      msg.includes("Transcript not available") ? 422 :
-      msg.includes("OPENAI_API_KEY") ? 500 :
-      500;
-    return NextResponse.json({ error: msg }, { status });
+        const msg = typeof err?.message === "string" ? err.message : "Unexpected server error";
+        //await finalize({ supabase, id: rowId, status: "failed", error: msg.slice(0, 500) });
+
+        if (rowId) {
+            await supabaseAuth
+              .from("video_summaries")
+              .update({ status: "failed", error: msg.slice(0, 500) })
+              .eq("id", rowId);
+        }
+    
+        const status =
+        msg.includes("Transcript not available") ? 422 :
+        msg.includes("OPENAI_API_KEY") ? 500 :
+        500;
+        return NextResponse.json({ error: msg }, { status });
   }
 }
