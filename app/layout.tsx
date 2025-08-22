@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://yt-summary.vedyugdaily.com";
 const TITLE = "Vedyug AI – Turn any YouTube video into actionable notes";
+const OG = `${SITE}/og.png`;
 const DESCRIPTION =
   "Paste a link. Get a beautiful, skimmable summary with takeaways, timestamps, and action items. 10 free credits on sign-up.";
 
@@ -18,14 +19,14 @@ export const metadata: Metadata = {
     url: "/",
     title: TITLE,
     description: DESCRIPTION,
-    siteName: "YT Summarizer",
-    images: [{ url: "/opengraph-image", width: 1200, height: 630, alt: TITLE }],
+    siteName: "Vedyug AI",
+    images: [{ url: OG, width: 1200, height: 630, alt: TITLE }],
   },
   twitter: {
     card: "summary_large_image",
     title: TITLE,
     description: DESCRIPTION,
-    images: ["/twitter-image"],
+    images: [OG],
     creator: "@vedyugdaily",
   },
   icons: {
