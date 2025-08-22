@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://yt-summary.vedyugdaily.com";
 const TITLE = "Vedyug AI – Turn any YouTube video into actionable notes";
-const OG = `${SITE}/og.png`;
+const OG = `${SITE}/og.png?v=3`;
 const DESCRIPTION =
   "Paste a link. Get a beautiful, skimmable summary with takeaways, timestamps, and action items. 10 free credits on sign-up.";
 
