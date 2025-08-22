@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
   }
   if (!creditRes?.[0]?.ok) {
     const remaining = creditRes?.[0]?.remaining ?? 0;
-    return NextResponse.json({ error: `No credits left. Remaining: ${remaining}` }, { status: 402 });
+    return NextResponse.json({ error: `You have no credits left. Please buy more credits.` }, { status: 402 });
   }
 
   // Insert pending row (no summary stored)
