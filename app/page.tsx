@@ -90,7 +90,15 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, instructions: notes }),
+        cache: "no-store",
       });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await res.text(); // likely an HTML error/redirect
+        throw new Error(`Non-JSON (${res.status}) → ${text.slice(0, 180)}`);
+      }
+
       const data = (await res.json()) as ApiResponse;
       setResult(data);
 
